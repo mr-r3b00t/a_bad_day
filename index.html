@@ -72,7 +72,7 @@
 
   /* ---------- Kill chain ---------- */
   .killchain{margin:18px 0;border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:14px 12px 10px}
-  .kc-title{font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-faint);padding:0 6px 12px;display:flex;justify-content:space-between}
+  .kc-title{font-family:var(--mono);font-size:10.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-faint);padding:0 6px 12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px 14px}
   .kc-track{display:flex;gap:6px;align-items:stretch}
   .kc-step{flex:1;min-width:0;border:1px solid var(--line-soft);border-radius:10px;background:var(--panel-2);padding:9px 6px 8px;cursor:pointer;position:relative;transition:.18s;display:flex;flex-direction:column;align-items:center;gap:5px}
   .kc-step:hover{border-color:var(--teal);transform:translateY(-2px)}
@@ -115,6 +115,11 @@
   .divider{width:1px;align-self:stretch;background:var(--line);margin:2px}
   .speed{display:flex;align-items:center;gap:9px;color:var(--ink-faint);font-size:11px;font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase}
   .speed input{accent-color:var(--teal);width:110px}
+  .sndbtn{padding:7px 11px;font-size:12px;font-weight:600;letter-spacing:0;text-transform:none;font-family:var(--sans)}
+  .sndbtn svg{width:14px;height:14px}
+  .sndbtn[aria-pressed="true"]{background:rgba(47,208,200,.14);border-color:var(--teal);color:var(--teal-soft)}
+  #vol{width:78px}
+  #vol:disabled{opacity:.35}
   .modeseg{display:inline-flex;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--panel-2)}
   .modeseg button{border:0;border-radius:0;background:transparent;color:var(--ink-dim);padding:9px 16px;font-weight:700}
   .modeseg button:hover{background:#1c2a3d}
@@ -281,6 +286,11 @@
     <button id="btnAuto"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 4l9 8-9 8V4zM15 4l5 8-5 8V4z"/></svg> Auto-play</button>
     <button id="btnReset" class="ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg> Reset</button>
     <div class="spacer"></div>
+    <div class="speed">
+      <button id="btnAudio" type="button" class="sndbtn" aria-pressed="false" title="Toggle sound (M)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M22 9l-6 6M16 9l6 6"/></svg> <span id="sndLbl">Sound off</span></button>
+      <input id="vol" type="range" min="0" max="100" value="60" step="5" aria-label="Volume" disabled>
+    </div>
+    <div class="divider"></div>
     <div class="speed">Replay speed <input id="speed" type="range" min="500" max="2800" value="1500" step="100" aria-label="Replay speed"></div>
   </div>
 
@@ -354,7 +364,9 @@ const ICON = {
   grid:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
   crosshair:'<circle cx="12" cy="12" r="9"/><path d="M12 3v5M12 16v5M3 12h5M16 12h5"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
   lock:'<rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
-  broken:'<path d="M12 3v5M12 16v5"/><path d="M8 8h8v8H8z"/>'
+  broken:'<path d="M12 3v5M12 16v5"/><path d="M8 8h8v8H8z"/>',
+  sndOn:'<path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.8a4.5 4.5 0 0 1 0 6.4"/><path d="M18.6 5.7a9 9 0 0 1 0 12.6"/>',
+  sndOff:'<path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M22 9l-6 6M16 9l6 6"/>'
 };
 function svgIcon(k,c){return '<svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"'+(c?' class="'+c+'"':'')+'>'+ICON[k]+'</svg>';}
 
@@ -555,6 +567,120 @@ const blueMode=()=>MODE==='blue';
     if(!reduce)requestAnimationFrame(draw);
   }
   if(reduce){c.style.display='none';}else draw();
+})();
+
+/* ============ Audio — fully procedural, no external assets ============ */
+const AudioFX=(function(){
+  const Ctor=window.AudioContext||window.webkitAudioContext;
+  let ctx=null,master=null,music=null,sfx=null,filt=null;
+  let oscs=[],pulse=null,on=false,vol=.6,tension=0,isBlue=false;
+
+  function build(){
+    if(ctx||!Ctor)return;
+    ctx=new Ctor();
+    master=ctx.createGain();master.gain.value=vol;master.connect(ctx.destination);
+    music=ctx.createGain();music.gain.value=0;music.connect(master);
+    sfx=ctx.createGain();sfx.gain.value=1;sfx.connect(master);
+    filt=ctx.createBiquadFilter();filt.type='lowpass';filt.frequency.value=300;filt.Q.value=4;filt.connect(music);
+    // three-voice drone: root, detuned twin (beating), and an interval voice that
+    // slides from a calm fifth to a dissonant minor 2nd as the domain falls
+    [[55,'sawtooth',.14],[55.4,'sawtooth',.14],[82.5,'triangle',.10]].forEach(([f,type,a])=>{
+      const o=ctx.createOscillator();o.type=type;o.frequency.value=f;
+      const g=ctx.createGain();g.gain.value=a;
+      o.connect(g);g.connect(filt);o.start();
+      oscs.push(o);
+    });
+    const lfo=ctx.createOscillator();lfo.frequency.value=.07;
+    const lg=ctx.createGain();lg.gain.value=70;
+    lfo.connect(lg);lg.connect(filt.frequency);lfo.start();
+  }
+  const now=()=>ctx.currentTime;
+
+  function apply(fast){
+    if(!ctx)return;
+    const n=now(),k=fast?.05:1.2;
+    music.gain.cancelScheduledValues(n);
+    music.gain.linearRampToValueAtTime(on?.5:0,n+(fast?.05:.6));
+    const root=isBlue?55:55+tension*2.4;
+    const third=isBlue?82.5:82.5-tension*24;      // fifth -> minor 2nd
+    oscs[0].frequency.linearRampToValueAtTime(root,n+k);
+    oscs[1].frequency.linearRampToValueAtTime(root*1.007+tension*.7,n+k);
+    oscs[2].frequency.linearRampToValueAtTime(third,n+k);
+    filt.frequency.linearRampToValueAtTime(isBlue?520:260+tension*1100,n+k);
+    filt.Q.linearRampToValueAtTime(isBlue?3:4+tension*8,n+k);
+    schedulePulse();
+  }
+  function schedulePulse(){
+    clearInterval(pulse);pulse=null;
+    if(!on||isBlue||tension<.15)return;
+    pulse=setInterval(thump,Math.max(340,1500-tension*1100)); // heartbeat accelerates
+  }
+  function thump(){
+    if(!ctx||!on)return;const n=now();
+    const o=ctx.createOscillator(),g=ctx.createGain();
+    o.type='sine';o.frequency.setValueAtTime(70,n);o.frequency.exponentialRampToValueAtTime(38,n+.22);
+    g.gain.setValueAtTime(.0001,n);g.gain.linearRampToValueAtTime(.20*(.4+tension),n+.02);
+    g.gain.exponentialRampToValueAtTime(.0001,n+.32);
+    o.connect(g);g.connect(music);o.start(n);o.stop(n+.36);
+  }
+  function tone(f,dur,type,amp,at,slide){
+    if(!ctx||!on)return;const n=at||now();
+    const o=ctx.createOscillator(),g=ctx.createGain();
+    o.type=type||'sine';o.frequency.setValueAtTime(f,n);
+    if(slide)o.frequency.exponentialRampToValueAtTime(Math.max(20,slide),n+dur);
+    g.gain.setValueAtTime(.0001,n);g.gain.linearRampToValueAtTime(amp,n+.012);
+    g.gain.exponentialRampToValueAtTime(.0001,n+dur);
+    o.connect(g);g.connect(sfx);o.start(n);o.stop(n+dur+.03);
+  }
+  function noise(dur,amp,at,lp){
+    if(!ctx||!on)return;const n=at||now(),len=Math.ceil(ctx.sampleRate*dur);
+    const b=ctx.createBuffer(1,len,ctx.sampleRate),d=b.getChannelData(0);
+    for(let i=0;i<len;i++)d[i]=(Math.random()*2-1)*(1-i/len);
+    const s=ctx.createBufferSource();s.buffer=b;
+    const f=ctx.createBiquadFilter();f.type='lowpass';f.frequency.value=lp||2200;
+    const g=ctx.createGain();g.gain.value=amp;
+    s.connect(f);f.connect(g);g.connect(sfx);s.start(n);
+  }
+
+  const S={
+    click(){tone(880,.07,'triangle',.09);tone(1320,.05,'sine',.05);},
+    beacon(){const n=now();tone(1500,.09,'sine',.08,n);tone(1500,.09,'sine',.05,n+.22);},
+    breach(){const n=now();tone(300,.55,'sawtooth',.20,n,60);noise(.35,.16,n,1400);tone(150,.5,'square',.10,n+.02,45);},
+    alarm(){const n=now();tone(660,.16,'square',.09,n);tone(440,.18,'square',.09,n+.18);},
+    block(){const n=now();tone(1174.7,.5,'sine',.15,n);tone(1760,.42,'sine',.07,n+.02);},
+    shield(){const n=now();tone(587.3,.2,'sine',.12,n);tone(880,.36,'sine',.12,n+.1);},
+    doom(){const n=now();tone(110,2.6,'sawtooth',.24,n,32);noise(1.6,.13,n,900);tone(55,2.8,'square',.13,n+.1,28);},
+    triumph(){const n=now();[523.3,659.3,784,1046.5].forEach((f,i)=>tone(f,1.1,'sine',.12,n+i*.13));}
+  };
+
+  return {
+    supported:!!Ctor,
+    isOn:()=>on,
+    toggle(){
+      build();
+      if(!ctx)return false;
+      on=!on;
+      if(on&&ctx.state==='suspended')ctx.resume();
+      apply(true);
+      if(!on)clearInterval(pulse);
+      return on;
+    },
+    setVol(v){vol=v;if(master)master.gain.linearRampToValueAtTime(v,now()+.08);},
+    setTension(t,blue){
+      const changed=(Math.abs(t-tension)>.001)||blue!==isBlue;
+      tension=t;isBlue=blue;
+      if(ctx&&changed)apply(false);
+    },
+    mode(blue){isBlue=blue;if(ctx)apply(false);},
+    stage(p,blue,last){
+      if(!on||!ctx)return;
+      if(last){blue?S.triumph():S.doom();return;}
+      if(blue){p.blue.verdict==='recovered'?S.shield():S.block();return;}
+      if(p.crit){S.breach();setTimeout(()=>S.alarm(),260);}
+      else if(p.asset==='c2')S.beacon();
+      else S.click();
+    }
+  };
 })();
 
 /* ============ Kill chain ============ */
@@ -862,6 +988,7 @@ function render(){
   if(blue){drawGauge(contain,"#2fd0c8","THREAT CONTAINED");document.documentElement.style.setProperty('--heat','0');}
   else{drawGauge(dc,heatColor(dc/100),"DOMAIN CONTROL");document.documentElement.style.setProperty('--heat',(dc/100).toFixed(2));}
   readout(blue?contain:dc);
+  AudioFX.setTension(blue?0:dc/100,blue);
   setStats(p);
 
   if(blue){
@@ -899,6 +1026,7 @@ function goTo(n){
   rebuildLog(n);render();finalBanner(n===PHASES.length-1);
   if(n===PHASES.length-1&&!blueMode())stopAuto();
   $('btnStep').disabled=n>=PHASES.length-1;
+  if(n>=0)AudioFX.stage(PHASES[n],blueMode(),n===PHASES.length-1);
   if(n>=0&&PHASES[n].crit&&!reduce){const a=$('alarm');a.classList.remove('flash');void a.offsetWidth;a.classList.add('flash');}
 }
 function stepFwd(){if(step<PHASES.length-1)goTo(step+1);}
@@ -917,6 +1045,7 @@ function setMode(m){
   $('footNote').innerHTML=m==='blue'
     ?'Lesson: the attacker only has to be lucky once, but the chain only has to break once too. Defense-in-depth stacks the odds — every layer is an independent chance to end the bad day early.'
     :'Root cause: a Tier 0 identity was used for high-risk interactive activity, and untrusted code executed with domain-admin context.';
+  AudioFX.mode(m==='blue');
   buildLegend();buildList();goTo(-1);
 }
 
@@ -928,6 +1057,36 @@ function startAuto(){
   auto=true;setAutoBtn(true);
   const tick=()=>{if(!auto)return;if(step>=PHASES.length-1){stopAuto();return;}stepFwd();timer=setTimeout(tick,+$('speed').value);};
   timer=setTimeout(tick,+$('speed').value*.4);
+}
+
+/* ============ Audio wiring ============ */
+function syncAudioBtn(on){
+  const b=$('btnAudio');
+  b.setAttribute('aria-pressed',on?'true':'false');
+  b.querySelector('svg').innerHTML=on?ICON.sndOn:ICON.sndOff;
+  $('sndLbl').textContent=on?'Sound on':'Sound off';
+  $('vol').disabled=!on;
+}
+if(!AudioFX.supported){
+  $('btnAudio').disabled=true;$('sndLbl').textContent='Sound n/a';$('btnAudio').title='Web Audio not supported in this browser';
+}else{
+  $('btnAudio').addEventListener('click',()=>{
+    const on=AudioFX.toggle();
+    syncAudioBtn(on);
+    try{localStorage.setItem('arbd-sound',on?'1':'0');}catch(e){}
+  });
+  $('vol').addEventListener('input',e=>AudioFX.setVol(+e.target.value/100));
+  // Restore a saved preference. Browsers block audio until the page has been
+  // interacted with, so arm it on the first gesture rather than at load.
+  let saved=null;try{saved=localStorage.getItem('arbd-sound');}catch(e){}
+  if(saved==='1'){
+    const arm=()=>{
+      document.removeEventListener('pointerdown',arm);document.removeEventListener('keydown',arm);
+      if(!AudioFX.isOn())syncAudioBtn(AudioFX.toggle());
+    };
+    document.addEventListener('pointerdown',arm,{once:true});
+    document.addEventListener('keydown',arm,{once:true});
+  }
 }
 
 /* ============ Wire ============ */
@@ -942,6 +1101,10 @@ document.addEventListener('keydown',e=>{
   else if(e.key==='ArrowLeft'){e.preventDefault();stopAuto();goTo(step-1);}
   else if(e.key.toLowerCase()==='r'){stopAuto();goTo(-1);}
   else if(e.key.toLowerCase()==='b'){setMode(blueMode()?'red':'blue');}
+  else if(e.key.toLowerCase()==='m'&&AudioFX.supported){
+    const on=AudioFX.toggle();syncAudioBtn(on);
+    try{localStorage.setItem('arbd-sound',on?'1':'0');}catch(err){}
+  }
 });
 
 buildLegend();buildList();goTo(-1);
