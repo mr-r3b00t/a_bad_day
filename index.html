@@ -287,8 +287,8 @@
     <button id="btnReset" class="ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg> Reset</button>
     <div class="spacer"></div>
     <div class="speed">
-      <button id="btnAudio" type="button" class="sndbtn" aria-pressed="false" title="Toggle sound (M)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M22 9l-6 6M16 9l6 6"/></svg> <span id="sndLbl">Sound off</span></button>
-      <input id="vol" type="range" min="0" max="100" value="60" step="5" aria-label="Volume" disabled>
+      <button id="btnAudio" type="button" class="sndbtn" aria-pressed="true" title="Toggle sound (M)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.5 8.8a4.5 4.5 0 0 1 0 6.4"/><path d="M18.6 5.7a9 9 0 0 1 0 12.6"/></svg> <span id="sndLbl">Sound on</span></button>
+      <input id="vol" type="range" min="0" max="100" value="60" step="5" aria-label="Volume">
     </div>
     <div class="divider"></div>
     <div class="speed">Replay speed <input id="speed" type="range" min="500" max="2800" value="1500" step="100" aria-label="Replay speed"></div>
@@ -573,7 +573,7 @@ const blueMode=()=>MODE==='blue';
 const AudioFX=(function(){
   const Ctor=window.AudioContext||window.webkitAudioContext;
   let ctx=null,master=null,music=null,sfx=null,filt=null;
-  let oscs=[],pulse=null,on=false,vol=.6,tension=0,isBlue=false;
+  let oscs=[],pulse=null,on=false,vol=.6,tension=0,isBlue=false,ended=false;
 
   function build(){
     if(ctx||!Ctor)return;
@@ -596,11 +596,14 @@ const AudioFX=(function(){
   }
   const now=()=>ctx.currentTime;
 
-  function apply(fast){
+  function apply(fast,fadeSec){
     if(!ctx)return;
     const n=now(),k=fast?.05:1.2;
+    const target=(on&&!ended)?.5:0;
+    const ramp=fadeSec!=null?fadeSec:(fast?.05:.6);
     music.gain.cancelScheduledValues(n);
-    music.gain.linearRampToValueAtTime(on?.5:0,n+(fast?.05:.6));
+    music.gain.setValueAtTime(music.gain.value,n);
+    music.gain.linearRampToValueAtTime(target,n+ramp);
     const root=isBlue?55:55+tension*2.4;
     const third=isBlue?82.5:82.5-tension*24;      // fifth -> minor 2nd
     oscs[0].frequency.linearRampToValueAtTime(root,n+k);
@@ -612,7 +615,7 @@ const AudioFX=(function(){
   }
   function schedulePulse(){
     clearInterval(pulse);pulse=null;
-    if(!on||isBlue||tension<.15)return;
+    if(!on||isBlue||ended||tension<.15)return;
     pulse=setInterval(thump,Math.max(340,1500-tension*1100)); // heartbeat accelerates
   }
   function thump(){
@@ -672,9 +675,15 @@ const AudioFX=(function(){
       if(ctx&&changed)apply(false);
     },
     mode(blue){isBlue=blue;if(ctx)apply(false);},
+    // Leaving the final stage brings the score back.
+    revive(){if(ended){ended=false;if(ctx)apply(false);}},
     stage(p,blue,last){
       if(!on||!ctx)return;
-      if(last){blue?S.triumph():S.doom();return;}
+      if(last){
+        blue?S.triumph():S.doom();
+        ended=true;apply(false,blue?4:5.5); // drone dies away under the sting
+        return;
+      }
       if(blue){p.blue.verdict==='recovered'?S.shield():S.block();return;}
       if(p.crit){S.breach();setTimeout(()=>S.alarm(),260);}
       else if(p.asset==='c2')S.beacon();
@@ -1026,6 +1035,7 @@ function goTo(n){
   rebuildLog(n);render();finalBanner(n===PHASES.length-1);
   if(n===PHASES.length-1&&!blueMode())stopAuto();
   $('btnStep').disabled=n>=PHASES.length-1;
+  if(n<PHASES.length-1)AudioFX.revive();
   if(n>=0)AudioFX.stage(PHASES[n],blueMode(),n===PHASES.length-1);
   if(n>=0&&PHASES[n].crit&&!reduce){const a=$('alarm');a.classList.remove('flash');void a.offsetWidth;a.classList.add('flash');}
 }
@@ -1076,10 +1086,14 @@ if(!AudioFX.supported){
     try{localStorage.setItem('arbd-sound',on?'1':'0');}catch(e){}
   });
   $('vol').addEventListener('input',e=>AudioFX.setVol(+e.target.value/100));
-  // Restore a saved preference. Browsers block audio until the page has been
-  // interacted with, so arm it on the first gesture rather than at load.
+  // Sound is on by default; only an explicitly saved 'off' keeps it muted.
+  // Browsers block audio until the page has been interacted with, so the button
+  // shows the intended state now and the engine starts on the first gesture.
   let saved=null;try{saved=localStorage.getItem('arbd-sound');}catch(e){}
-  if(saved==='1'){
+  if(saved==='0'){
+    syncAudioBtn(false);
+  }else{
+    syncAudioBtn(true);
     const arm=()=>{
       document.removeEventListener('pointerdown',arm);document.removeEventListener('keydown',arm);
       if(!AudioFX.isOn())syncAudioBtn(AudioFX.toggle());
